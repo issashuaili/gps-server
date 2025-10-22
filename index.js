@@ -177,24 +177,22 @@ function handleGpsConnection(socket) {
           // Parse AVL data
           try {
             const parser = new ProtocolParser(dataBuffer.toString('hex'));
-            console.log(`[GPS] 🔍 Parser Content length: ${parser.Content?.length || 0}, CodecID: ${parser.CodecID}`);
-            console.log(`[GPS] 🔍 Full parser object:`, JSON.stringify(parser, null, 2));
             
-            if (parser.Content && parser.Content.length > 0) {
-              const rawRecords = parser.Content;
+            if (parser.Content && parser.Content.AVL_Datas && parser.Content.AVL_Datas.length > 0) {
+              const rawRecords = parser.Content.AVL_Datas;
               console.log(`[GPS] 📍 Parsed ${rawRecords.length} GPS records from IMEI: ${authenticatedIMEI}`);
               
               // Format records for Fleetee API
               const records = rawRecords.map(record => ({
-                timestamp: record.timestampMs || Date.now(),
-                latitude: record.latitude || 0,
-                longitude: record.longitude || 0,
-                speed: record.speed || null,
-                angle: record.angle || null,
-                altitude: record.altitude || null,
-                satellites: record.satellites || null,
-                odometer: record.ioElements?.find(io => io.id === 199)?.value || null,
-                ignition: record.ioElements?.find(io => io.id === 239)?.value === 1 ? true : null,
+                timestamp: new Date(record.Timestamp).getTime(),
+                latitude: record.GPSelement?.Latitude || 0,
+                longitude: record.GPSelement?.Longitude || 0,
+                speed: record.GPSelement?.Speed || 0,
+                angle: record.GPSelement?.Angle || null,
+                altitude: record.GPSelement?.Altitude || null,
+                satellites: record.GPSelement?.Satellites || null,
+                odometer: record.IOelement?.Elements?.[199] || null,
+                ignition: record.IOelement?.Elements?.[239] === 1 ? true : (record.IOelement?.Elements?.[239] === 0 ? false : null),
               }));
               
               // Forward to Fleetee API (non-blocking)
