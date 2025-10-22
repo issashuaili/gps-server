@@ -6,7 +6,7 @@
     "start": "node index.js"
   },
   "dependencies": {
-    "complete-teltonika-parser": "^3.1.2",
+    "complete-teltonika-parser": "^0.3.6",
     "dotenv": "^16.4.7"
   }
 }
