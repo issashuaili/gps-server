@@ -159,7 +159,7 @@ function handleGpsConnection(socket) {
           const preamble = dataBuffer.readUInt32BE(0);
           if (preamble !== 0) {
             console.error(`[GPS] ❌ Invalid AVL preamble: ${preamble.toString(16)}`);
-            dataBuffer = Buffer.alloc(0);
+            const parser = new ProtocolParser(dataBuffer.toString('hex'));
             break;
           }
           
