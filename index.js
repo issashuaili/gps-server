@@ -177,11 +177,10 @@ function handleGpsConnection(socket) {
           // Parse AVL data
           try {
             const parser = new ProtocolParser(dataBuffer.toString('hex'));
-            console.log(`[GPS] 🔍 Parser result - AVL exists: ${!!parser.avl}, Data exists: ${!!parser.avl?.data}, Data length: ${parser.avl?.data?.length || 0}`);
-            console.log(`[GPS] 🔍 Parser object keys:`, Object.keys(parser));
+            console.log(`[GPS] 🔍 Parser Content length: ${parser.Content?.length || 0}, CodecID: ${parser.CodecID}`);
             
-            if (parser.avl && parser.avl.data && parser.avl.data.length > 0) {
-              const rawRecords = parser.avl.data;
+            if (parser.Content && parser.Content.length > 0) {
+              const rawRecords = parser.Content;
               console.log(`[GPS] 📍 Parsed ${rawRecords.length} GPS records from IMEI: ${authenticatedIMEI}`);
               
               // Format records for Fleetee API
