@@ -177,6 +177,8 @@ function handleGpsConnection(socket) {
           // Parse AVL data
           try {
             const parser = new ProtocolParser(dataBuffer.toString('hex'));
+            console.log(`[GPS] 🔍 Parser result - AVL exists: ${!!parser.avl}, Data exists: ${!!parser.avl?.data}, Data length: ${parser.avl?.data?.length || 0}`);
+            console.log(`[GPS] 🔍 Parser object keys:`, Object.keys(parser));
             
             if (parser.avl && parser.avl.data && parser.avl.data.length > 0) {
               const rawRecords = parser.avl.data;
