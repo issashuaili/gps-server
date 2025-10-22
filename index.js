@@ -133,26 +133,38 @@ function handleGpsConnection(socket) {
         let parsed;
         let frameConsumed = false;
         
-        try {
-          const parser = new ProtocolParser(dataBuffer);
-          parsed = {
-            imei: parser.imei || null,
-            avl: parser.avl || null,
-          };
-          frameConsumed = true;
-        } catch (parseError) {
-          // Parser failed - either incomplete frame or bad data
-          // If we have a reasonable amount of data but still can't parse, log warning
-          if (dataBuffer.length > 512) {
-            console.warn(`[GPS] ⚠️  Waiting for more data from ${sessionId} (buffer: ${dataBuffer.length} bytes)`);
-          }
-          break; // Exit loop, wait for more data
-        }
-        
-        if (!frameConsumed) break;
-        
-        // Calculate consumed bytes (IMEI packet is 17 bytes: 2 preamble + 15 IMEI)
-        // AVL packet structure varies, we'll estimate conservatively
+        // Manual IMEI parsing (17 bytes: 2 length + 15 IMEI)
+if (!authenticatedIMEI && dataBuffer.length >= 17) {
+  const imeiLength = dataBuffer.readUInt16BE(0);
+  if (imeiLength === 15) {
+    const imeiString = dataBuffer.slice(2, 17).toString('ascii');
+    parsed = {
+      imei: imeiString,
+      avl: null,
+    };
+    frameConsumed = true;
+  }
+} else if (authenticatedIMEI) {
+  // Use parser for AVL data only
+  try {
+    const parser = new ProtocolParser(dataBuffer);
+    parsed = {
+      imei: null,
+      avl: parser.avl || null,
+    };
+    frameConsumed = true;
+  } catch (parseError) {
+    // Parser failed - wait for more data
+    if (dataBuffer.length > 512) {
+      console.warn(`[GPS] ⚠️  Waiting for more data from ${sessionId} (buffer: ${dataBuffer.length} bytes)`);
+    }
+    break;
+  }
+}
+
+if (!parsed) {
+  break; // Wait for more data
+}
         let bytesConsumed = 0;
         
         if (parsed.imei && !parsed.avl) {
