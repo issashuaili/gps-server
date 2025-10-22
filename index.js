@@ -134,7 +134,7 @@ function handleGpsConnection(socket) {
         let frameConsumed = false;
         
         try {
-          const parser = new ProtocolParser(dataBuffer);
+          const parser = new ProtocolParser(dataBuffer.toString('hex'));
           parsed = {
             imei: parser.imei || null,
             avl: parser.avl || null,
