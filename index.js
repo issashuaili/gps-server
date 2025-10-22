@@ -68,7 +68,7 @@ async function forwardToFleetee(imei, records) {
 function handleGpsConnection(socket) {
   const sessionId = `${socket.remoteAddress}:${socket.remotePort}`;
   let authenticatedIMEI = null;
-  let dataBuffer = Buffer.alloc(0); // Buffer for accumulating TCP stream data
+  let dataBuffer = Buffer.alloc(0);
   
   // Create session
   activeSessions.set(sessionId, {
@@ -88,7 +88,7 @@ function handleGpsConnection(socket) {
       console.log(`[GPS] ❌ Disconnected: ${sessionId} | IMEI: ${session.imei || 'none'} | Packets: ${session.packetsReceived}`);
       activeSessions.delete(sessionId);
     }
-    dataBuffer = Buffer.alloc(0); // Clear buffer
+    dataBuffer = Buffer.alloc(0);
   };
   
   socket.on('end', cleanup);
@@ -105,7 +105,7 @@ function handleGpsConnection(socket) {
     socket.destroy();
   });
   
-  // Process incoming data with proper buffering for TCP stream
+  // Process incoming data
   socket.on('data', async (chunk) => {
     try {
       const session = activeSessions.get(sessionId);
@@ -118,7 +118,7 @@ function handleGpsConnection(socket) {
       session.lastDataAt = new Date();
       session.bytesReceived += chunk.length;
       
-      // Limit total buffer size to prevent memory issues
+      // Limit total buffer size
       if (dataBuffer.length > 64 * 1024) {
         console.error(`[GPS] ❌ Buffer too large from ${sessionId}: ${dataBuffer.length} bytes`);
         socket.destroy();
@@ -127,115 +127,112 @@ function handleGpsConnection(socket) {
       
       console.log(`[GPS] 📦 Received ${chunk.length} bytes from ${sessionId} (buffer: ${dataBuffer.length} bytes)`);
       
-      // Process all complete frames in the buffer
-      // Teltonika devices often send multiple frames in one TCP chunk
+      // Process frames
       while (dataBuffer.length > 0) {
-        let parsed;
-        let frameConsumed = false;
-        
-        // Manual IMEI parsing (17 bytes: 2 length + 15 IMEI)
-if (!authenticatedIMEI && dataBuffer.length >= 17) {
-  const imeiLength = dataBuffer.readUInt16BE(0);
-  if (imeiLength === 15) {
-    const imeiString = dataBuffer.slice(2, 17).toString('ascii');
-    parsed = {
-      imei: imeiString,
-      avl: null,
-    };
-    frameConsumed = true;
-  }
-} else if (authenticatedIMEI) {
-  // Use parser for AVL data only
-  try {
-    const parser = new ProtocolParser(dataBuffer);
-    parsed = {
-      imei: null,
-      avl: parser.avl || null,
-    };
-    frameConsumed = true;
-  } catch (parseError) {
-    // Parser failed - wait for more data
-    if (dataBuffer.length > 512) {
-      console.warn(`[GPS] ⚠️  Waiting for more data from ${sessionId} (buffer: ${dataBuffer.length} bytes)`);
-    }
-    break;
-  }
-}
-
-if (!parsed) {
-  break; // Wait for more data
-}
+        let parsed = null;
         let bytesConsumed = 0;
         
-        if (parsed.imei && !parsed.avl) {
-          // IMEI packet: 2 bytes (length) + 15 bytes (IMEI)
-          bytesConsumed = 17;
-        } else if (parsed.avl) {
-          // AVL packet: read data length from buffer (bytes 4-7)
-          if (dataBuffer.length >= 8) {
-            const dataLength = dataBuffer.readUInt32BE(4);
-            bytesConsumed = 8 + dataLength + 4; // preamble(4) + length(4) + data + CRC(4)
+        // 1. IMEI Authentication (17 bytes: 2 length + 15 IMEI)
+        if (!authenticatedIMEI && dataBuffer.length >= 17) {
+          const imeiLength = dataBuffer.readUInt16BE(0);
+          if (imeiLength === 15) {
+            const imeiString = dataBuffer.slice(2, 17).toString('ascii');
+            
+            session.imei = imeiString;
+            authenticatedIMEI = imeiString;
+            session.packetsReceived++;
+            
+            console.log(`[GPS] 🔐 Authenticated: ${sessionId} | IMEI: ${imeiString}`);
+            
+            // Send IMEI acceptance (0x01)
+            socket.write(Buffer.from([0x01]));
+            
+            // Consume IMEI packet
+            dataBuffer = dataBuffer.slice(17);
+            continue;
           }
         }
         
-        // If we couldn't determine bytes consumed, assume entire buffer (conservative)
-        if (bytesConsumed === 0 || bytesConsumed > dataBuffer.length) {
-          console.warn(`[GPS] ⚠️  Could not determine frame size, clearing buffer`);
-          dataBuffer = Buffer.alloc(0);
+        // 2. AVL Data (after authentication)
+        if (authenticatedIMEI && dataBuffer.length >= 8) {
+          // Check for valid AVL packet (4 zeros + length)
+          const preamble = dataBuffer.readUInt32BE(0);
+          if (preamble !== 0) {
+            console.error(`[GPS] ❌ Invalid AVL preamble: ${preamble.toString(16)}`);
+            dataBuffer = Buffer.alloc(0);
+            break;
+          }
+          
+          const dataLength = dataBuffer.readUInt32BE(4);
+          const totalPacketSize = 8 + dataLength + 4; // preamble + length + data + CRC
+          
+          console.log(`[GPS] 📏 AVL packet - Data length: ${dataLength}, Total: ${totalPacketSize} bytes, Buffer: ${dataBuffer.length}`);
+          
+          // Wait for complete packet
+          if (dataBuffer.length < totalPacketSize) {
+            console.log(`[GPS] ⏳ Waiting for complete packet (need ${totalPacketSize}, have ${dataBuffer.length})`);
+            break;
+          }
+          
+          // Parse AVL data
+          try {
+            const parser = new ProtocolParser(dataBuffer);
+            
+            if (parser.avl && parser.avl.data && parser.avl.data.length > 0) {
+              const rawRecords = parser.avl.data;
+              console.log(`[GPS] 📍 Parsed ${rawRecords.length} GPS records from IMEI: ${authenticatedIMEI}`);
+              
+              // Format records for Fleetee API
+              const records = rawRecords.map(record => ({
+                timestamp: record.timestampMs || Date.now(),
+                latitude: record.latitude || 0,
+                longitude: record.longitude || 0,
+                speed: record.speed || null,
+                angle: record.angle || null,
+                altitude: record.altitude || null,
+                satellites: record.satellites || null,
+                odometer: record.ioElements?.find(io => io.id === 199)?.value || null,
+                ignition: record.ioElements?.find(io => io.id === 239)?.value === 1 ? true : null,
+              }));
+              
+              // Forward to Fleetee API (non-blocking)
+              setImmediate(async () => {
+                await forwardToFleetee(authenticatedIMEI, records);
+              });
+              
+              // Send acknowledgment (4 bytes: number of records)
+              const ackBuffer = Buffer.alloc(4);
+              ackBuffer.writeUInt32BE(rawRecords.length, 0);
+              socket.write(ackBuffer);
+              
+              console.log(`[GPS] ✅ Acknowledged ${rawRecords.length} records to device`);
+              
+              session.packetsReceived++;
+              bytesConsumed = totalPacketSize;
+            } else {
+              console.warn(`[GPS] ⚠️  Parser returned no AVL data`);
+              bytesConsumed = totalPacketSize; // Consume anyway
+            }
+          } catch (parseError) {
+            console.error(`[GPS] ❌ Parser error:`, parseError.message);
+            // Consume the packet anyway to avoid infinite loop
+            bytesConsumed = totalPacketSize;
+          }
+          
+          // Remove consumed bytes
+          if (bytesConsumed > 0) {
+            dataBuffer = dataBuffer.slice(bytesConsumed);
+          } else {
+            // Safety: clear buffer if we couldn't parse
+            console.warn(`[GPS] ⚠️  Clearing buffer due to parse failure`);
+            dataBuffer = Buffer.alloc(0);
+            break;
+          }
+        } else {
+          // Not enough data for AVL packet
           break;
         }
-        
-        // Remove consumed bytes from buffer
-        dataBuffer = dataBuffer.slice(bytesConsumed);
-        session.packetsReceived++;
-        
-        // Handle IMEI authentication
-        if (parsed.imei && !session.imei) {
-          session.imei = parsed.imei;
-          authenticatedIMEI = parsed.imei;
-          console.log(`[GPS] 🔐 Authenticated: ${sessionId} | IMEI: ${parsed.imei}`);
-          
-          // Send IMEI acceptance (1 byte: 0x01)
-          socket.write(Buffer.from([0x01]));
-          continue; // Process next frame in buffer
-        }
-        
-        // Process AVL data (GPS records)
-        if (parsed.avl && parsed.avl.data && parsed.avl.data.length > 0) {
-          const imei = session.imei || authenticatedIMEI;
-          if (!imei) {
-            console.warn(`[GPS] ⚠️  Received AVL data without IMEI from ${sessionId}`);
-            continue; // Skip this frame
-          }
-          
-          const rawRecords = parsed.avl.data;
-          console.log(`[GPS] 📍 Processing ${rawRecords.length} GPS records from IMEI: ${imei}`);
-          
-          // Format records for Fleetee API
-          const records = rawRecords.map(record => ({
-            timestamp: record.timestampMs || Date.now(),
-            latitude: record.latitude || 0,
-            longitude: record.longitude || 0,
-            speed: record.speed || null,
-            angle: record.angle || null,
-            odometer: record.ioElements?.find(io => io.id === 199)?.value || null,
-            ignition: record.ioElements?.find(io => io.id === 239)?.value === 1 ? true : null,
-          }));
-          
-          // Forward to Fleetee API (non-blocking)
-          setImmediate(async () => {
-            await forwardToFleetee(imei, records);
-          });
-          
-          // Send acknowledgment to device (number of records processed)
-          const recordCount = rawRecords.length;
-          const ackBuffer = Buffer.alloc(4);
-          ackBuffer.writeUInt32BE(recordCount, 0);
-          socket.write(ackBuffer);
-          
-          console.log(`[GPS] ✅ Acknowledged ${recordCount} records to device`);
-        }
-      } // End while loop - process next frame in buffer
+      } // End while loop
     } catch (error) {
       console.error(`[GPS] ❌ Error processing data from ${sessionId}:`, error);
     }
@@ -278,7 +275,7 @@ process.on('SIGINT', () => {
   });
 });
 
-// Status endpoint (optional - for health checks)
+// Health check server
 const http = require('http');
 const statusPort = process.env.STATUS_PORT || 3000;
 
