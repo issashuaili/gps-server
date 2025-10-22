@@ -178,6 +178,7 @@ function handleGpsConnection(socket) {
           try {
             const parser = new ProtocolParser(dataBuffer.toString('hex'));
             console.log(`[GPS] 🔍 Parser Content length: ${parser.Content?.length || 0}, CodecID: ${parser.CodecID}`);
+            console.log(`[GPS] 🔍 Full parser object:`, JSON.stringify(parser, null, 2));
             
             if (parser.Content && parser.Content.length > 0) {
               const rawRecords = parser.Content;
